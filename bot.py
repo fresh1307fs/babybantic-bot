@@ -12,6 +12,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 CHANNEL_USERNAME = os.environ.get("CHANNEL_USERNAME", "babybantic")
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "@babybantic_admin")
+ADMIN_GROUP_ID = os.environ.get("ADMIN_GROUP_ID", "-1003761758294")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -87,8 +88,30 @@ def get_channel_posts():
     return "Kanal ma'lumotlari mavjud emas"
 
 
+async def forward_to_admin(context, user, message_text, bot_response, photo=False):
+    """Mijoz xabarini admin guruhiga yuborish"""
+    try:
+        user_info = f"👤 Mijoz: {user.first_name or ''} {user.last_name or ''}"
+        if user.username:
+            user_info += f" (@{user.username})"
+        user_info += f"\n🆔 ID: {user.id}"
+        
+        if photo:
+            admin_message = f"{user_info}\n📸 Rasm yubordi\n\n🤖 Bot javobi:\n{bot_response}"
+        else:
+            admin_message = f"{user_info}\n💬 Xabar: {message_text}\n\n🤖 Bot javobi:\n{bot_response}"
+        
+        await context.bot.send_message(
+            chat_id=ADMIN_GROUP_ID,
+            text=admin_message
+        )
+    except Exception as e:
+        logger.error(f"Admin guruhiga yuborishda xato: {e}")
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text or ""
+    user = update.message.from_user
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     await asyncio.sleep(random.uniform(2, 4))
@@ -117,6 +140,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
         await asyncio.sleep(random.uniform(1, 2))
         await update.message.reply_text(bot_response)
+        
+        # Admin guruhiga forward
+        await forward_to_admin(context, user, user_message, bot_response)
 
     except Exception as e:
         logger.error(f"Xato: {e}")
@@ -129,22 +155,21 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     channel_posts = get_channel_posts()
     system = SYSTEM_PROMPT.format(channel_posts=channel_posts, admin=ADMIN_USERNAME)
+    user = update.message.from_user
 
     if 'history' not in context.user_data:
         context.user_data['history'] = []
 
     try:
-        # Rasmni yuklab olish
         photo = update.message.photo[-1]
         file = await context.bot.get_file(photo.file_id)
         file_url = file.file_path
-        
+
         img_response = requests.get(file_url, timeout=10)
         img_data = base64.standard_b64encode(img_response.content).decode("utf-8")
-        
+
         caption = update.message.caption or "Bu kiyimning narxi qancha?"
-        
-        # Claude ga rasm bilan yuborish
+
         messages = context.user_data['history'] + [{
             "role": "user",
             "content": [
@@ -169,11 +194,11 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             system=system,
             messages=messages
         )
-        
+
         bot_response = response.content[0].text
-        
+
         context.user_data['history'].append({
-            "role": "user", 
+            "role": "user",
             "content": f"[Rasm yubordi]: {caption}"
         })
         context.user_data['history'].append({"role": "assistant", "content": bot_response})
@@ -181,12 +206,15 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
         await asyncio.sleep(random.uniform(1, 2))
         await update.message.reply_text(bot_response)
+        
+        # Admin guruhiga forward
+        await forward_to_admin(context, user, caption, bot_response, photo=True)
 
     except Exception as e:
         logger.error(f"Rasm xatosi: {e}")
-        await update.message.reply_text(
-            f"Rasmingizni ko'rdim! Narx haqida aniq ma'lumot uchun adminimizga yozing: {ADMIN_USERNAME} 😊"
-        )
+        bot_response = f"Rasmingizni ko'rdim! Narx haqida aniq ma'lumot uchun adminimizga yozing: {ADMIN_USERNAME} 😊"
+        await update.message.reply_text(bot_response)
+        await forward_to_admin(context, user, "Rasm yubordi", bot_response, photo=True)
 
 
 def main():
