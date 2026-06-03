@@ -3,6 +3,7 @@ import asyncio
 import random
 import os
 import requests
+import base64
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 import anthropic
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-SYSTEM_PROMPT = """Sen "Baby Bantic" bolalar kiyimi va oyoq kiyimi do'konining onlayn maslahatchi xodimiSan. Ismim yo'q, shunchaki do'kon xodimiman.
+SYSTEM_PROMPT = """Sen "Baby Bantic" bolalar kiyimi va oyoq kiyimi do'konining onlayn maslahatchi xodimiSan.
 
 DO'KON HAQIDA:
 - Xitoy va Turkiyaning sifatli, zamonaviy fabrikaviy bolalar kiyimlari va oyoq kiyimlari
@@ -31,21 +32,22 @@ MUHIM QOIDALAR:
 3. Xushmuomila, iliq, samimiy bo'l - xuddi yaqin do'st kabi
 4. Aksariyat mijozlar onalar - ularga mehr va hurmat bilan muomala qil
 5. Mijozni xarid qilishga undab tur, lekin bosim o'tkazma
-6. Qisqa va aniq javob ber, keraksiz uzun yozma
+6. Qisqa va aniq javob ber
 7. 1-2 ta emoji ishlatish mumkin
-8. Narx so'rashsa kanaldan ma'lumot asosida javob ber
+8. Hech qachon ro'yxat shaklida javob berma — oddiy gap bilan yoz
 
 RASM KELGANDA:
-- Rasmni ko'ra olmasligingni aytma
-- "Bu mahsulot haqida aniqroq ma'lumot uchun adminimizga yozing, u sizga narx va mavjudlikni aytadi" de
-- Admin: {admin}
+- Rasmni diqqat bilan ko'r
+- Kanaldan narx ma'lumotlarini tekshir
+- Agar mos narx topilsa — ayt
+- Topilmasa — adminga yo'nalt: {admin}
 
 KANAL MA'LUMOTLARI (narxlar):
 {channel_posts}
 
-Agar aniq narx topilmasa: "Bu mahsulotning narxi uchun adminimizga murojaat qiling: {admin} — u sizga tezda javob beradi 😊"
+Agar aniq narx topilmasa: "Bu mahsulotning narxi uchun adminimizga murojaat qiling: {admin} 😊"
 
-Tabiiy, issiq, insoniy tarzda javob ber! Hech qachon ro'yxat shaklida javob berma — oddiy gap bilan yoz."""
+Tabiiy, issiq, insoniy tarzda javob ber!"""
 
 
 def get_channel_posts():
@@ -125,33 +127,66 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     await asyncio.sleep(random.uniform(2, 4))
 
-    caption = update.message.caption or ""
-    
-    response_text = f"Rasmingizni ko'rdim! 😊 Narx va mavjudlik haqida aniq ma'lumot olish uchun adminimizga yozing: {ADMIN_USERNAME} — u sizga tezda javob beradi!"
-    
-    if caption:
-        channel_posts = get_channel_posts()
-        system = SYSTEM_PROMPT.format(channel_posts=channel_posts, admin=ADMIN_USERNAME)
-        
-        if 'history' not in context.user_data:
-            context.user_data['history'] = []
-        
-        context.user_data['history'].append({"role": "user", "content": f"Mijoz rasm yubordi va yozdi: {caption}"})
-        
-        try:
-            response = anthropic_client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=300,
-                system=system,
-                messages=context.user_data['history']
-            )
-            response_text = response.content[0].text
-            context.user_data['history'].append({"role": "assistant", "content": response_text})
-        except Exception as e:
-            logger.error(f"Xato: {e}")
+    channel_posts = get_channel_posts()
+    system = SYSTEM_PROMPT.format(channel_posts=channel_posts, admin=ADMIN_USERNAME)
 
-    await asyncio.sleep(random.uniform(1, 2))
-    await update.message.reply_text(response_text)
+    if 'history' not in context.user_data:
+        context.user_data['history'] = []
+
+    try:
+        # Rasmni yuklab olish
+        photo = update.message.photo[-1]
+        file = await context.bot.get_file(photo.file_id)
+        file_url = file.file_path
+        
+        img_response = requests.get(file_url, timeout=10)
+        img_data = base64.standard_b64encode(img_response.content).decode("utf-8")
+        
+        caption = update.message.caption or "Bu kiyimning narxi qancha?"
+        
+        # Claude ga rasm bilan yuborish
+        messages = context.user_data['history'] + [{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": img_data
+                    }
+                },
+                {
+                    "type": "text",
+                    "text": caption
+                }
+            ]
+        }]
+
+        response = anthropic_client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            system=system,
+            messages=messages
+        )
+        
+        bot_response = response.content[0].text
+        
+        context.user_data['history'].append({
+            "role": "user", 
+            "content": f"[Rasm yubordi]: {caption}"
+        })
+        context.user_data['history'].append({"role": "assistant", "content": bot_response})
+
+        await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+        await asyncio.sleep(random.uniform(1, 2))
+        await update.message.reply_text(bot_response)
+
+    except Exception as e:
+        logger.error(f"Rasm xatosi: {e}")
+        await update.message.reply_text(
+            f"Rasmingizni ko'rdim! Narx haqida aniq ma'lumot uchun adminimizga yozing: {ADMIN_USERNAME} 😊"
+        )
 
 
 def main():
