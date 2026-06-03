@@ -7,8 +7,7 @@ from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 import anthropic
 
-# Tokenlar environment variable dan o'qiladi
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8897001080:AAFdX4IY05mS5ojOUsVVgkpv-tjwYfZz3d4")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 CHANNEL_USERNAME = os.environ.get("CHANNEL_USERNAME", "babybantic")
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "@babybantic_admin")
@@ -18,31 +17,35 @@ logger = logging.getLogger(__name__)
 
 anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-SYSTEM_PROMPT = """Sen "Baby Bantic" bolalar kiyimi va oyoq kiyimi do'konining onlayn maslahatchi xodimiSan.
+SYSTEM_PROMPT = """Sen "Baby Bantic" bolalar kiyimi va oyoq kiyimi do'konining onlayn maslahatchi xodimiSan. Ismim yo'q, shunchaki do'kon xodimiman.
 
 DO'KON HAQIDA:
-- Xitoy va Turkiyaning sifatli, zamonaviy fabrikaviy bolalar kiyimlari
-- Bolalar oyoq kiyimlari
+- Xitoy va Turkiyaning sifatli, zamonaviy fabrikaviy bolalar kiyimlari va oyoq kiyimlari
+- 0 yoshdan 15 yoshgacha bo'lgan bolalar uchun
 - O'zbekiston bo'ylab dostavka xizmati bor
-- Narxlar qulay, ko'plab skidkalar mavjud
+- Narxlar juda qulay, ko'plab skidkalar mavjud
 
 MUHIM QOIDALAR:
-1. HECH QACHON o'zingni bot yoki AI ekanimni aytma - sen do'kon xodimiSan
+1. HECH QACHON o'zingni bot yoki AI ekanimni aytma - sen tirik do'kon xodimiSan
 2. Faqat O'ZBEK tilida javob ber
-3. Xushmuomila, iliq, samimiy bo'l - xuddi do'stona xodim kabi
-4. Ayollar bilan gaplashayotganda mehr bilan muomala qil
+3. Xushmuomila, iliq, samimiy bo'l - xuddi yaqin do'st kabi
+4. Aksariyat mijozlar onalar - ularga mehr va hurmat bilan muomala qil
 5. Mijozni xarid qilishga undab tur, lekin bosim o'tkazma
-6. Qisqa va aniq javob ber
-7. Emoji ishlatishi mumkin, lekin ko'p emas
-8. Narx so'rashsa kanaldan ma'lumot asosida javob ber, aniq narx bo'lmasa adminga yo'nalt
-9. Mijozni ushlab qolish uchun qiziqarli savollar ber
+6. Qisqa va aniq javob ber, keraksiz uzun yozma
+7. 1-2 ta emoji ishlatish mumkin
+8. Narx so'rashsa kanaldan ma'lumot asosida javob ber
 
-KANAL MA'LUMOTLARI:
+RASM KELGANDA:
+- Rasmni ko'ra olmasligingni aytma
+- "Bu mahsulot haqida aniqroq ma'lumot uchun adminimizga yozing, u sizga narx va mavjudlikni aytadi" de
+- Admin: {admin}
+
+KANAL MA'LUMOTLARI (narxlar):
 {channel_posts}
 
-Agar aniq narx yoki mahsulot ma'lumoti bo'lmasa: "Buning aniq narxi uchun adminga murojaat qiling: {admin}"
+Agar aniq narx topilmasa: "Bu mahsulotning narxi uchun adminimizga murojaat qiling: {admin} — u sizga tezda javob beradi 😊"
 
-Tabiiy, insoniy tarzda javob ber!"""
+Tabiiy, issiq, insoniy tarzda javob ber! Hech qachon ro'yxat shaklida javob berma — oddiy gap bilan yoz."""
 
 
 def get_channel_posts():
@@ -120,33 +123,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-    await asyncio.sleep(random.uniform(3, 5))
-
-    channel_posts = get_channel_posts()
-    system = SYSTEM_PROMPT.format(channel_posts=channel_posts, admin=ADMIN_USERNAME)
-
-    if 'history' not in context.user_data:
-        context.user_data['history'] = []
+    await asyncio.sleep(random.uniform(2, 4))
 
     caption = update.message.caption or ""
-    user_message = f"Mijoz rasm yubordi. {caption if caption else 'Narxi qancha deb so`rayapti.'}"
-    context.user_data['history'].append({"role": "user", "content": user_message})
+    
+    response_text = f"Rasmingizni ko'rdim! 😊 Narx va mavjudlik haqida aniq ma'lumot olish uchun adminimizga yozing: {ADMIN_USERNAME} — u sizga tezda javob beradi!"
+    
+    if caption:
+        channel_posts = get_channel_posts()
+        system = SYSTEM_PROMPT.format(channel_posts=channel_posts, admin=ADMIN_USERNAME)
+        
+        if 'history' not in context.user_data:
+            context.user_data['history'] = []
+        
+        context.user_data['history'].append({"role": "user", "content": f"Mijoz rasm yubordi va yozdi: {caption}"})
+        
+        try:
+            response = anthropic_client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=300,
+                system=system,
+                messages=context.user_data['history']
+            )
+            response_text = response.content[0].text
+            context.user_data['history'].append({"role": "assistant", "content": response_text})
+        except Exception as e:
+            logger.error(f"Xato: {e}")
 
-    try:
-        response = anthropic_client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=500,
-            system=system,
-            messages=context.user_data['history']
-        )
-        bot_response = response.content[0].text
-        context.user_data['history'].append({"role": "assistant", "content": bot_response})
-        await asyncio.sleep(random.uniform(1, 2))
-        await update.message.reply_text(bot_response)
-
-    except Exception as e:
-        logger.error(f"Xato: {e}")
-        await update.message.reply_text("Kechirasiz, hozir texnik muammo bor. Biroz kutib qayta yozing 🙏")
+    await asyncio.sleep(random.uniform(1, 2))
+    await update.message.reply_text(response_text)
 
 
 def main():
