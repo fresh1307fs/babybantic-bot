@@ -1,17 +1,17 @@
 import logging
 import asyncio
 import random
+import os
 import requests
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 import anthropic
 
-# === TOKENLARNI SHU YERGA KIRITING ===
-TELEGRAM_TOKEN = "8897001080:AAFdX4IY05mS5ojOUsVVgkpv-tjwYfZz3d4"
-ANTHROPIC_API_KEY = "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"
-CHANNEL_USERNAME = "babybantic"
-ADMIN_USERNAME = "@babybantic_admin"
-# =====================================
+# Tokenlar environment variable dan o'qiladi
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8897001080:AAFdX4IY05mS5ojOUsVVgkpv-tjwYfZz3d4")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+CHANNEL_USERNAME = os.environ.get("CHANNEL_USERNAME", "babybantic")
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "@babybantic_admin")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
